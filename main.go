@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -82,6 +83,7 @@ func handleMessage(message *tgbotapi.Message) {
 					Size:           openai.CreateImageSize256x256,
 					ResponseFormat: openai.CreateImageResponseFormatURL,
 					N:              2,
+					User:           strconv.FormatInt(message.From.ID, 10),
 				},
 			)
 
@@ -141,16 +143,28 @@ func handleMessage(message *tgbotapi.Message) {
 
 		bot.Send(msg)
 	} else {
+		messages := make([]openai.ChatCompletionMessage, 0)
+
+		if message.ReplyToMessage != nil {
+			if message.ReplyToMessage.From.IsBot {
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: message.ReplyToMessage.Text,
+				})
+			}
+		}
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: message.Text,
+		})
+
 		resp, err := client.CreateChatCompletion(
 			context.Background(),
 			openai.ChatCompletionRequest{
-				Model: openai.GPT3Dot5Turbo,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: message.Text,
-					},
-				},
+				Model:     openai.GPT3Dot5Turbo,
+				Messages:  messages,
+				MaxTokens: 100,
+				User:      strconv.FormatInt(message.From.ID, 10),
 			},
 		)
 
