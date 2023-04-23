@@ -45,6 +45,10 @@ func main() {
 	u.Timeout = 60
 
 	for update := range bot.GetUpdatesChan(u) {
+		if update.Message == nil {
+			log.Println("No message", update)
+			continue
+		}
 		go handleMessage(update.Message)
 	}
 
@@ -53,17 +57,6 @@ func main() {
 	<-quitChannel
 	//time for cleanup before exit
 	fmt.Println("Adios!")
-}
-
-func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case update := <-updates:
-			go handleMessage(update.Message)
-		}
-	}
 }
 
 func handleMessage(message *tgbotapi.Message) {
