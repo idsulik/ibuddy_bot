@@ -163,7 +163,7 @@ func handleMessage(message *tgbotapi.Message) {
 			openai.ChatCompletionRequest{
 				Model:     openai.GPT3Dot5Turbo,
 				Messages:  messages,
-				MaxTokens: 100,
+				MaxTokens: 300,
 				User:      strconv.FormatInt(message.From.ID, 10),
 			},
 		)
