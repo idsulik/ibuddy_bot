@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -10,7 +9,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -43,13 +44,15 @@ func main() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
+	for update := range bot.GetUpdatesChan(u) {
+		go handleMessage(update.Message)
+	}
 
-	go receiveUpdates(ctx, bot.GetUpdatesChan(u))
-
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
-	cancel()
+	quitChannel := make(chan os.Signal, 1)
+	signal.Notify(quitChannel, syscall.SIGINT, syscall.SIGTERM)
+	<-quitChannel
+	//time for cleanup before exit
+	fmt.Println("Adios!")
 }
 
 func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
