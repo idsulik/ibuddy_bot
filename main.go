@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -18,12 +19,18 @@ const (
 	debug         = "DEBUG"
 )
 
+var (
+	bot    *tgbotapi.BotAPI
+	client *openai.Client
+)
+
 func main() {
+	var err error
 	telegramToken := os.Getenv(telegramToken)
 	chatgptKey := os.Getenv(chatgptKey)
 	debug := os.Getenv(debug) == "True"
-	bot, err := tgbotapi.NewBotAPI(telegramToken)
-	client := openai.NewClient(chatgptKey)
+	bot, err = tgbotapi.NewBotAPI(telegramToken)
+	client = openai.NewClient(chatgptKey)
 
 	if err != nil {
 		panic(err)
@@ -36,114 +43,137 @@ func main() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	updates := bot.GetUpdatesChan(u)
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
 
-	for update := range updates {
-		if update.Message != nil { // If we got a message
-			log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
+	go receiveUpdates(ctx, bot.GetUpdatesChan(u))
 
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Loading...")
-			msg.ReplyToMessageID = update.Message.MessageID
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	cancel()
+}
 
-			loadingMsg, _ := bot.Send(msg)
-
-			if strings.Contains(strings.ToLower(update.Message.Text), "generate image") {
-				resp, err := client.CreateImage(
-					context.Background(),
-					openai.ImageRequest{
-						Prompt:         update.Message.Text,
-						Size:           openai.CreateImageSize256x256,
-						ResponseFormat: openai.CreateImageResponseFormatURL,
-						N:              2,
-					},
-				)
-
-				if err != nil {
-					fmt.Printf("ChatCompletion error: %v\n", err)
-
-					msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Failed, try again")
-					msg.ReplyToMessageID = update.Message.MessageID
-					bot.Send(msg)
-					return
-				}
-
-				files := make([]interface{}, len(resp.Data))
-				for i, url := range resp.Data {
-					files[i] = tgbotapi.NewInputMediaPhoto(tgbotapi.FileURL(url.URL))
-				}
-
-				mediaGroup := tgbotapi.NewMediaGroup(update.Message.Chat.ID, files)
-
-				bot.SendMediaGroup(mediaGroup)
-			} else if update.Message.Voice != nil || update.Message.Audio != nil {
-				fileId := ""
-				if update.Message.Voice != nil {
-					fileId = update.Message.Voice.FileID
-				} else {
-					fileId = update.Message.Audio.FileID
-				}
-
-				file, err := bot.GetFile(tgbotapi.FileConfig{
-					FileID: fileId,
-				})
-
-				fileUrl := file.Link(telegramToken)
-
-				localFile, err := downloadFileByUrl(fileUrl)
-
-				resp, err := client.CreateTranscription(
-					context.Background(),
-					openai.AudioRequest{
-						Model:    openai.Whisper1,
-						FilePath: localFile.Name(),
-					},
-				)
-
-				if err != nil {
-					fmt.Printf("ChatCompletion error: %v\n", err)
-
-					msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Failed, try again")
-					msg.ReplyToMessageID = update.Message.MessageID
-					bot.Send(msg)
-					return
-				}
-
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, resp.Text)
-				msg.ReplyToMessageID = update.Message.MessageID
-
-				bot.Send(msg)
-			} else {
-				resp, err := client.CreateChatCompletion(
-					context.Background(),
-					openai.ChatCompletionRequest{
-						Model: openai.GPT3Dot5Turbo,
-						Messages: []openai.ChatCompletionMessage{
-							{
-								Role:    openai.ChatMessageRoleUser,
-								Content: update.Message.Text,
-							},
-						},
-					},
-				)
-
-				if err != nil {
-					fmt.Printf("ChatCompletion error: %v\n", err)
-
-					msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Failed, try again")
-					msg.ReplyToMessageID = update.Message.MessageID
-					bot.Send(msg)
-					return
-				}
-
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, resp.Choices[0].Message.Content)
-				msg.ReplyToMessageID = update.Message.MessageID
-
-				bot.Send(msg)
-			}
-
-			bot.Send(tgbotapi.NewDeleteMessage(update.Message.Chat.ID, loadingMsg.MessageID))
+func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-updates:
+			go handleMessage(update.Message)
 		}
 	}
+}
+
+func handleMessage(message *tgbotapi.Message) {
+	log.Printf("[%s] %s", message.From.UserName, message.Text)
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Loading...")
+	msg.ReplyToMessageID = message.MessageID
+
+	loadingMsg, _ := bot.Send(msg)
+
+	if strings.HasPrefix(message.Text, "/image") {
+		prompt := strings.TrimSpace(strings.ReplaceAll(message.Text, "/image", ""))
+
+		if len(prompt) < 3 {
+			msg = tgbotapi.NewMessage(message.Chat.ID, "Please write more information")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+		} else {
+			resp, err := client.CreateImage(
+				context.Background(),
+				openai.ImageRequest{
+					Prompt:         prompt,
+					Size:           openai.CreateImageSize256x256,
+					ResponseFormat: openai.CreateImageResponseFormatURL,
+					N:              2,
+				},
+			)
+
+			if err != nil {
+				fmt.Printf("ChatCompletion error: %v\n", err)
+
+				msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+				msg.ReplyToMessageID = message.MessageID
+				bot.Send(msg)
+				return
+			}
+
+			files := make([]interface{}, len(resp.Data))
+			for i, url := range resp.Data {
+				files[i] = tgbotapi.NewInputMediaPhoto(tgbotapi.FileURL(url.URL))
+			}
+
+			mediaGroup := tgbotapi.NewMediaGroup(message.Chat.ID, files)
+
+			bot.SendMediaGroup(mediaGroup)
+		}
+	} else if message.Voice != nil || message.Audio != nil {
+		fileId := ""
+		if message.Voice != nil {
+			fileId = message.Voice.FileID
+		} else {
+			fileId = message.Audio.FileID
+		}
+
+		file, err := bot.GetFile(tgbotapi.FileConfig{
+			FileID: fileId,
+		})
+
+		fileUrl := file.Link(telegramToken)
+
+		localFile, err := downloadFileByUrl(fileUrl)
+
+		resp, err := client.CreateTranscription(
+			context.Background(),
+			openai.AudioRequest{
+				Model:    openai.Whisper1,
+				FilePath: localFile.Name(),
+			},
+		)
+
+		if err != nil {
+			fmt.Printf("ChatCompletion error: %v\n", err)
+
+			msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		msg = tgbotapi.NewMessage(message.Chat.ID, resp.Text)
+		msg.ReplyToMessageID = message.MessageID
+
+		bot.Send(msg)
+	} else {
+		resp, err := client.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model: openai.GPT3Dot5Turbo,
+				Messages: []openai.ChatCompletionMessage{
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: message.Text,
+					},
+				},
+			},
+		)
+
+		if err != nil {
+			fmt.Printf("ChatCompletion error: %v\n", err)
+
+			msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		msg = tgbotapi.NewMessage(message.Chat.ID, resp.Choices[0].Message.Content)
+		msg.ReplyToMessageID = message.MessageID
+
+		bot.Send(msg)
+	}
+
+	bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
 }
 
 func downloadFileByUrl(url string) (*os.File, error) {
