@@ -16,21 +16,22 @@ import (
 )
 
 const (
-	telegramToken = "TELEGRAM_TOKEN"
-	chatgptKey    = "CHATGPT_KEY"
-	debug         = "DEBUG"
+	telegramTokenEnvName = "TELEGRAM_TOKEN"
+	chatgptKeyEnvName    = "CHATGPT_KEY"
+	debugEnvName         = "DEBUG"
 )
 
 var (
-	bot    *tgbotapi.BotAPI
-	client *openai.Client
+	bot           *tgbotapi.BotAPI
+	client        *openai.Client
+	telegramToken string
 )
 
 func main() {
 	var err error
-	telegramToken := os.Getenv(telegramToken)
-	chatgptKey := os.Getenv(chatgptKey)
-	debug := os.Getenv(debug) == "True"
+	telegramToken = os.Getenv(telegramTokenEnvName)
+	chatgptKey := os.Getenv(chatgptKeyEnvName)
+	debug := os.Getenv(debugEnvName) == "True"
 	bot, err = tgbotapi.NewBotAPI(telegramToken)
 	client = openai.NewClient(chatgptKey)
 
@@ -105,7 +106,7 @@ func handleMessage(message *tgbotapi.Message) {
 
 			bot.SendMediaGroup(mediaGroup)
 		}
-	} else if message.Voice != nil || message.Audio != nil {
+	} else {
 		fileId := ""
 		if message.Voice != nil {
 			fileId = message.Voice.FileID
@@ -113,36 +114,42 @@ func handleMessage(message *tgbotapi.Message) {
 			fileId = message.Audio.FileID
 		}
 
-		file, err := bot.GetFile(tgbotapi.FileConfig{
-			FileID: fileId,
-		})
+		isVoiceText := false
+		text := message.Text
+		if fileId != "" {
+			file, err := bot.GetFile(tgbotapi.FileConfig{
+				FileID: fileId,
+			})
 
-		fileUrl := file.Link(telegramToken)
+			fileUrl := file.Link(telegramToken)
+			localFile, err := downloadFileByUrl(fileUrl)
+			mp3FilePath, err := convertOggToMp3(localFile.Name())
 
-		localFile, err := downloadFileByUrl(fileUrl)
+			resp, err := client.CreateTranscription(
+				context.Background(),
+				openai.AudioRequest{
+					Model:    openai.Whisper1,
+					FilePath: mp3FilePath,
+				},
+			)
 
-		resp, err := client.CreateTranscription(
-			context.Background(),
-			openai.AudioRequest{
-				Model:    openai.Whisper1,
-				FilePath: localFile.Name(),
-			},
-		)
+			os.Remove(mp3FilePath)
 
-		if err != nil {
-			fmt.Printf("ChatCompletion error: %v\n", err)
+			if err != nil {
+				fmt.Printf("ChatCompletion error: %v\n", err)
 
-			msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
-			msg.ReplyToMessageID = message.MessageID
-			bot.Send(msg)
-			return
+				msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+				msg.ReplyToMessageID = message.MessageID
+				bot.Send(msg)
+				return
+			}
+
+			if resp.Text != "" {
+				text = resp.Text
+				isVoiceText = true
+			}
 		}
 
-		msg = tgbotapi.NewMessage(message.Chat.ID, resp.Text)
-		msg.ReplyToMessageID = message.MessageID
-
-		bot.Send(msg)
-	} else {
 		messages := make([]openai.ChatCompletionMessage, 0)
 
 		if message.ReplyToMessage != nil {
@@ -155,7 +162,7 @@ func handleMessage(message *tgbotapi.Message) {
 		}
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
-			Content: message.Text,
+			Content: text,
 		})
 
 		resp, err := client.CreateChatCompletion(
@@ -177,7 +184,11 @@ func handleMessage(message *tgbotapi.Message) {
 			return
 		}
 
-		msg = tgbotapi.NewMessage(message.Chat.ID, resp.Choices[0].Message.Content)
+		responseText := resp.Choices[0].Message.Content
+		if isVoiceText {
+			responseText = fmt.Sprintf("voice text: %s\n\n%s", text, responseText)
+		}
+		msg = tgbotapi.NewMessage(message.Chat.ID, responseText)
 		msg.ReplyToMessageID = message.MessageID
 
 		bot.Send(msg)
@@ -187,7 +198,7 @@ func handleMessage(message *tgbotapi.Message) {
 }
 
 func downloadFileByUrl(url string) (*os.File, error) {
-	file, err := os.CreateTemp(os.TempDir(), "voice_*.wav")
+	file, err := os.CreateTemp(os.TempDir(), "voice")
 
 	if err != nil {
 		return nil, err

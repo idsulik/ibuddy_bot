@@ -8,6 +8,7 @@ COPY *.go ./
 RUN go build -o /goapp
 
 FROM alpine
+RUN apk add  --no-cache ffmpeg
 WORKDIR /app
 COPY --from=build /goapp /app
 ENTRYPOINT ./goapp
