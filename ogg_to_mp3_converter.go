@@ -8,9 +8,6 @@ import (
 )
 
 func convertOggToMp3(oggFilepath string) (mp3Filepath string, err error) {
-	defer func() {
-		os.Remove(oggFilepath)
-	}()
 	name := filepath.Base(oggFilepath)
 	mp3Filepath = fmt.Sprintf("%s%s.mp3", os.TempDir(), name)
 
