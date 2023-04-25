@@ -19,6 +19,7 @@ const (
 	telegramTokenEnvName = "TELEGRAM_TOKEN"
 	chatgptKeyEnvName    = "CHATGPT_KEY"
 	debugEnvName         = "DEBUG"
+	maxTokens            = 400
 )
 
 var (
@@ -170,7 +171,7 @@ func handleMessage(message *tgbotapi.Message) {
 			openai.ChatCompletionRequest{
 				Model:     openai.GPT3Dot5Turbo,
 				Messages:  messages,
-				MaxTokens: 300,
+				MaxTokens: maxTokens,
 				User:      strconv.FormatInt(message.From.ID, 10),
 			},
 		)
