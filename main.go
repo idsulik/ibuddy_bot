@@ -111,7 +111,7 @@ func handleMessage(message *tgbotapi.Message) {
 		fileId := ""
 		if message.Voice != nil {
 			fileId = message.Voice.FileID
-		} else {
+		} else if message.Audio != nil {
 			fileId = message.Audio.FileID
 		}
 
