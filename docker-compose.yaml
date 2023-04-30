@@ -14,8 +14,10 @@ services:
     container_name: mongodb
     image: mongo:6
     restart: always
+    env_file:
+      - .env
     volumes:
-    - mongodb_data:/data/db
+      - mongodb_data:/data/db
 
 volumes:
   mongodb_data:
