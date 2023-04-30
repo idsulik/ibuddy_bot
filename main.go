@@ -55,9 +55,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("Before")
 	db.Init()
-	fmt.Println("test")
 	defer db.Disconnect(context.Background())
 
 	bot.Debug = debug
