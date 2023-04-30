@@ -72,7 +72,7 @@ func main() {
 func handleMessage(message *tgbotapi.Message) {
 	log.Printf("[%s] %s", message.From.UserName, message.Text)
 
-	msg := tgbotapi.NewMessage(message.Chat.ID, "Loading...")
+	msg := newSystemMessage(message.Chat.ID, "Loading...")
 	msg.ReplyToMessageID = message.MessageID
 
 	loadingMsg, _ := bot.Send(msg)
@@ -92,12 +92,12 @@ func handleMessage(message *tgbotapi.Message) {
 			handleImageCommand(message)
 		case strings.HasPrefix(messageText, "/new"):
 			delete(userMessages, userId)
-			msg := tgbotapi.NewMessage(message.Chat.ID, "New context started")
+			msg := newSystemMessage(message.Chat.ID, "New context started")
 			msg.ReplyToMessageID = message.MessageID
 
 			bot.Send(msg)
 		default:
-			msg := tgbotapi.NewMessage(message.Chat.ID, "Unknown command")
+			msg := newSystemMessage(message.Chat.ID, "Unknown command")
 			msg.ReplyToMessageID = message.MessageID
 			bot.Send(msg)
 		}
@@ -143,7 +143,7 @@ func handleMessage(message *tgbotapi.Message) {
 		if err != nil {
 			fmt.Printf("ChatCompletion error: %v\n", err)
 
-			msg = tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+			msg := newSystemMessage(message.Chat.ID, "Failed, try again")
 			msg.ReplyToMessageID = message.MessageID
 			bot.Send(msg)
 			return
@@ -170,15 +170,23 @@ func handleMessage(message *tgbotapi.Message) {
 		}
 
 		if isVoiceText {
-			responseText = fmt.Sprintf("voice text: %s\n\n%s", messageText, responseText)
+			responseText = fmt.Sprintf("```\nvoice text: %s\n\n%s```\n", messageText, responseText)
 		}
 		msg = tgbotapi.NewMessage(message.Chat.ID, responseText)
+		msg.ReplyMarkup = tgbotapi.ModeMarkdownV2
 		msg.ReplyToMessageID = message.MessageID
 
 		bot.Send(msg)
 	}
 
 	bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
+}
+
+func newSystemMessage(chatId int64, text string) tgbotapi.MessageConfig {
+	msg := tgbotapi.NewMessage(chatId, fmt.Sprintf("`%s`", text))
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+
+	return msg
 }
 
 func extractVoiceText(message *tgbotapi.Message) string {
@@ -197,12 +205,18 @@ func extractVoiceText(message *tgbotapi.Message) string {
 
 	fileUrl := file.Link(telegramToken)
 	localFile, err := downloadFileByUrl(fileUrl)
+	defer os.Remove(localFile.Name())
 	mp3FilePath, err := convertOggToMp3(localFile.Name())
+	defer os.Remove(mp3FilePath)
 
-	defer func() {
-		os.Remove(localFile.Name())
-		os.Remove(mp3FilePath)
-	}()
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+
+		msg := newSystemMessage(message.Chat.ID, "Failed, try again")
+		msg.ReplyToMessageID = message.MessageID
+		bot.Send(msg)
+		return ""
+	}
 
 	resp, err := client.CreateTranscription(
 		context.Background(),
@@ -213,9 +227,9 @@ func extractVoiceText(message *tgbotapi.Message) string {
 	)
 
 	if err != nil {
-		fmt.Printf("ChatCompletion error: %v\n", err)
+		fmt.Printf("error: %v\n", err)
 
-		msg := tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+		msg := newSystemMessage(message.Chat.ID, "Failed, try again")
 		msg.ReplyToMessageID = message.MessageID
 		bot.Send(msg)
 		return ""
@@ -228,7 +242,7 @@ func handleImageCommand(message *tgbotapi.Message) {
 	prompt := strings.TrimSpace(strings.ReplaceAll(message.Text, "/image", ""))
 
 	if len(prompt) < 3 {
-		msg := tgbotapi.NewMessage(message.Chat.ID, "Please write more information")
+		msg := newSystemMessage(message.Chat.ID, "Please write more information")
 		msg.ReplyToMessageID = message.MessageID
 		bot.Send(msg)
 	} else {
@@ -246,7 +260,7 @@ func handleImageCommand(message *tgbotapi.Message) {
 		if err != nil {
 			fmt.Printf("ChatCompletion error: %v\n", err)
 
-			msg := tgbotapi.NewMessage(message.Chat.ID, "Failed, try again")
+			msg := newSystemMessage(message.Chat.ID, "Failed, try again")
 			msg.ReplyToMessageID = message.MessageID
 			bot.Send(msg)
 			return
