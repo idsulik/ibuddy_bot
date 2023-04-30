@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/joho/godotenv"
 	"github.com/sashabaranov/go-openai"
-	"io"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"ibuddy_bot/database"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -18,34 +19,46 @@ import (
 const (
 	telegramTokenEnvName = "TELEGRAM_TOKEN"
 	chatgptKeyEnvName    = "CHATGPT_KEY"
+	mongoDbUri           = "MONGODB_URI"
 	debugEnvName         = "DEBUG"
 	maxTokens            = 400
-	contextLength        = 200
+	maxChatMessages      = 30
 )
-
-type RoleMessage struct {
-	role string
-	text string
-}
 
 var (
 	bot           *tgbotapi.BotAPI
 	client        *openai.Client
+	db            *database.Database
 	telegramToken string
-	userMessages  map[int64][]RoleMessage
 )
 
 func main() {
-	var err error
+	err := godotenv.Load()
+	if err != nil {
+		//log.Fatal("Error loading .env file")
+	}
+
 	telegramToken = os.Getenv(telegramTokenEnvName)
 	chatgptKey := os.Getenv(chatgptKeyEnvName)
+	mongodbUri := os.Getenv(mongoDbUri)
 	debug := os.Getenv(debugEnvName) == "True"
-	bot, err = tgbotapi.NewBotAPI(telegramToken)
 	client = openai.NewClient(chatgptKey)
+	bot, err = tgbotapi.NewBotAPI(telegramToken)
 
 	if err != nil {
 		panic(err)
 	}
+
+	db, err = database.New(context.Background(), mongodbUri)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("Before")
+	db.Init()
+	fmt.Println("test")
+	defer db.Disconnect(context.Background())
 
 	bot.Debug = debug
 
@@ -55,11 +68,13 @@ func main() {
 	u.Timeout = 60
 
 	for update := range bot.GetUpdatesChan(u) {
-		if update.Message == nil {
-			log.Println("No message", update)
-			continue
+		if update.Message != nil {
+			go handleMessage(update.Message)
+		} else if update.CallbackQuery != nil {
+			handleCallbackQuery(update.CallbackQuery)
+		} else {
+			log.Println("Unknown update!")
 		}
-		go handleMessage(update.Message)
 	}
 
 	quitChannel := make(chan os.Signal, 1)
@@ -69,39 +84,102 @@ func main() {
 	fmt.Println("Adios!")
 }
 
+func handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
+	chatId, err := primitive.ObjectIDFromHex(callbackQuery.Data)
+
+	if err != nil {
+		log.Println(err)
+
+		return
+	}
+
+	chat, err := db.GetChatById(chatId)
+
+	callback := tgbotapi.NewCallback(callbackQuery.ID, chat.Title)
+
+	if _, err := bot.Request(callback); err != nil {
+		panic(err)
+	}
+
+	user := getCurrentUser(callbackQuery.Message)
+	msg, err := bot.Send(
+		newSystemMessage(callbackQuery.Message.Chat.ID, fmt.Sprintf("Active chat: %s", chat.Title)),
+	)
+
+	if err != nil {
+		log.Println(err)
+
+		return
+	}
+
+	changeUserActiveChat(&user, chatId)
+	pinMessage(msg.Chat.ID, msg.MessageID)
+}
+
+func pinMessage(chatId int64, messageId int) {
+	_, err := bot.Send(tgbotapi.PinChatMessageConfig{
+		ChatID:              chatId,
+		MessageID:           messageId,
+		DisableNotification: true,
+	})
+
+	if err != nil {
+		log.Println(err)
+	}
+}
+
 func handleMessage(message *tgbotapi.Message) {
-	log.Printf("[%s] %s", message.From.UserName, message.Text)
+	if message.PinnedMessage != nil {
+		log.Printf("Pinned message: %s", message.PinnedMessage.Text)
+		return
+	}
 
 	msg := newSystemMessage(message.Chat.ID, "Loading...")
+	msg.ReplyMarkup = tgbotapi.ReplyKeyboardRemove{
+		RemoveKeyboard: true,
+	}
 	msg.ReplyToMessageID = message.MessageID
 
 	loadingMsg, _ := bot.Send(msg)
 
-	userId := message.From.ID
-	messageText := strings.TrimSpace(message.Text)
+	user := getCurrentUser(message)
 
-	if message.From.IsBot {
-		if message.ReplyToMessage != nil {
-			userId = message.ReplyToMessage.From.ID
+	if user.IsBanned() {
+		msg := newSystemMessage(message.Chat.ID, fmt.Sprintf("You're banned: %s", *user.BanReason))
+		msg.ReplyToMessageID = message.MessageID
+
+		_, err := bot.Send(msg)
+
+		if err != nil {
+			log.Println(err)
 		}
+
+		return
 	}
 
-	if strings.HasPrefix(messageText, "/") {
-		switch true {
-		case strings.HasPrefix(messageText, "/image"):
-			handleImageCommand(message)
-		case strings.HasPrefix(messageText, "/new"):
-			delete(userMessages, userId)
-			msg := newSystemMessage(message.Chat.ID, "New context started")
-			msg.ReplyToMessageID = message.MessageID
-
-			bot.Send(msg)
-		default:
-			msg := newSystemMessage(message.Chat.ID, "Unknown command")
-			msg.ReplyToMessageID = message.MessageID
-			bot.Send(msg)
-		}
+	messageText := strings.TrimSpace(message.Text)
+	if message.IsCommand() {
+		handleCommandMessage(message)
 	} else {
+		if len(messageText) < 2 {
+			msg := newSystemMessage(message.Chat.ID, "Too short message")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+
+			return
+		}
+
+		if user.ActiveChatId == nil {
+			res, err := db.CreateChat(database.Chat{UserId: user.Id, Title: messageText})
+
+			if err != nil {
+				log.Println(err)
+			} else {
+				v, _ := res.InsertedID.(primitive.ObjectID)
+				changeUserActiveChat(&user, v)
+				pinMessage(message.Chat.ID, message.MessageID)
+			}
+		}
 
 		isVoiceText := false
 		voiceText := extractVoiceText(message)
@@ -111,19 +189,25 @@ func handleMessage(message *tgbotapi.Message) {
 			messageText = voiceText
 		}
 
-		if userMessages == nil {
-			userMessages = make(map[int64][]RoleMessage)
-			userMessages[userId] = make([]RoleMessage, 0)
-		}
+		var limit int64 = maxChatMessages
+		activeChatMessages, _ := db.ListChatMessages(*user.ActiveChatId, &limit)
+		ReverseSlice(activeChatMessages)
 
-		messages := make([]openai.ChatCompletionMessage, len(userMessages[userId]))
+		messages := make([]openai.ChatCompletionMessage, len(activeChatMessages))
 
-		for i, msg := range userMessages[userId] {
+		for i, msg := range activeChatMessages {
 			messages[i] = openai.ChatCompletionMessage{
-				Role:    msg.role,
-				Content: msg.text,
+				Role:    msg.Role,
+				Content: msg.Text,
 			}
 		}
+
+		userMessageId, _ := db.InsertMessage(database.Message{
+			ChatId: *user.ActiveChatId,
+			UserId: message.From.ID,
+			Role:   database.RoleUser,
+			Text:   messageText,
+		})
 
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
@@ -136,55 +220,202 @@ func handleMessage(message *tgbotapi.Message) {
 				Model:     openai.GPT3Dot5Turbo,
 				Messages:  messages,
 				MaxTokens: maxTokens,
-				User:      strconv.FormatInt(userId, 10),
+				User:      strconv.FormatInt(user.Id, 10),
 			},
 		)
 
 		if err != nil {
-			fmt.Printf("ChatCompletion error: %v\n", err)
+			log.Println(err)
 
 			msg := newSystemMessage(message.Chat.ID, "Failed, try again")
 			msg.ReplyToMessageID = message.MessageID
-			bot.Send(msg)
+			_, err = bot.Send(msg)
+
+			if err != nil {
+				log.Println(err)
+			}
+
 			return
 		}
 
 		responseText := resp.Choices[0].Message.Content
 
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleAssistant,
-			Content: responseText,
+		_, err = db.InsertMessage(database.Message{
+			ChatId:     *user.ActiveChatId,
+			ReplyTo:    *userMessageId,
+			UserId:     bot.Self.ID,
+			Role:       database.RoleAssistant,
+			Text:       responseText,
+			Additional: resp,
 		})
 
-		userMessages[userId] = append(userMessages[userId],
-			RoleMessage{
-				role: openai.ChatMessageRoleUser,
-				text: messageText,
-			}, RoleMessage{
-				role: openai.ChatMessageRoleAssistant,
-				text: responseText,
-			})
-
-		if len(userMessages[userId]) > contextLength {
-			userMessages[userId] = userMessages[userId][2:]
+		if err != nil {
+			log.Println(err)
 		}
 
 		if isVoiceText {
-			responseText = fmt.Sprintf("```\nvoice text: %s\n\n%s```\n", messageText, responseText)
+			responseText = fmt.Sprintf("**voice text**:\n```\n%s\n```\n\n%s", messageText, responseText)
 		}
+
 		msg = tgbotapi.NewMessage(message.Chat.ID, responseText)
-		msg.ReplyMarkup = tgbotapi.ModeMarkdownV2
+		msg.ParseMode = tgbotapi.ModeMarkdown
 		msg.ReplyToMessageID = message.MessageID
 
-		bot.Send(msg)
+		_, err = bot.Send(msg)
+
+		if err != nil {
+			log.Println(err)
+		}
 	}
 
-	bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
+	_, err := bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
+
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func changeUserActiveChat(user *database.User, chatId primitive.ObjectID) {
+	user.ActiveChatId = &chatId
+	db.UpdateUser(user)
+}
+
+func handleCommandMessage(message *tgbotapi.Message) {
+	switch message.Command() {
+	case "start":
+		handleStartCommand(message)
+	case "image":
+		handleImageCommand(message)
+	case "new":
+		handleNewCommand(message)
+	case "chats":
+		handleChatsCommand(message)
+	case "history":
+		handleHistoryCommand(message)
+	default:
+		msg := newSystemMessage(message.Chat.ID, "Unknown command")
+		msg.ReplyToMessageID = message.MessageID
+		_, err := bot.Send(msg)
+
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+func handleNewCommand(message *tgbotapi.Message) {
+	user := getCurrentUser(message)
+
+	user.ActiveChatId = nil
+
+	db.UpdateUser(&user)
+
+	msg := newSystemMessage(message.Chat.ID, "New context started")
+	msg.ReplyToMessageID = message.MessageID
+
+	bot.Send(msg)
+	bot.Send(tgbotapi.UnpinAllChatMessagesConfig{
+		ChatID: message.Chat.ID,
+	})
+}
+
+func handleStartCommand(message *tgbotapi.Message) {
+	msg := newSystemMessage(message.Chat.ID, "Welcome!")
+	msg.ReplyToMessageID = message.MessageID
+	bot.Send(msg)
+}
+
+func getCurrentUser(message *tgbotapi.Message) database.User {
+	userId := message.From.ID
+	username := message.From.UserName
+
+	if message.From.IsBot {
+		if message.ReplyToMessage != nil {
+			userId = message.ReplyToMessage.From.ID
+			username = message.ReplyToMessage.From.UserName
+		}
+	}
+
+	user, _ := db.GetOrCreateUser(userId, &database.User{
+		Id:       userId,
+		Username: username,
+	})
+
+	return user
+}
+
+func handleChatsCommand(message *tgbotapi.Message) {
+	chats, _ := db.ListUserChats(getCurrentUser(message).Id)
+
+	if len(chats) == 0 {
+		newSystemReply(message, "No chats found")
+		return
+	}
+
+	buttons := make([][]tgbotapi.InlineKeyboardButton, len(chats))
+
+	for i, chat := range chats {
+		chatIdHex := chat.Id.Hex()
+		buttons[i] = []tgbotapi.InlineKeyboardButton{{
+			Text:         chat.Title,
+			CallbackData: &chatIdHex,
+		}}
+	}
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Click on chat you want to switch")
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
+	msg.ReplyToMessageID = message.MessageID
+
+	_, err := bot.Send(msg)
+
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func handleHistoryCommand(message *tgbotapi.Message) {
+	user := getCurrentUser(message)
+
+	if user.ActiveChatId == nil {
+		newSystemReply(message, "There is no active chat")
+
+		return
+	}
+
+	var limit int64 = maxChatMessages
+	messages, _ := db.ListChatMessages(*user.ActiveChatId, &limit)
+	ReverseSlice(messages)
+
+	items := make([]string, len(messages))
+	for i, msg := range messages {
+		if msg.Role == database.RoleUser {
+			items[i] = fmt.Sprintf("*Your message*:\n%s", msg.Text)
+		} else {
+			items[i] = fmt.Sprintf("`Assistant's answer`:\n%s", msg.Text)
+		}
+	}
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, strings.Join(items, "\n\n"))
+	msg.ParseMode = tgbotapi.ModeMarkdown
+	msg.ReplyToMessageID = message.MessageID
+
+	_, err := bot.Send(msg)
+
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func newSystemReply(message *tgbotapi.Message, text string) (tgbotapi.Message, error) {
+	msgConfig := newSystemMessage(message.Chat.ID, text)
+
+	return bot.Send(msgConfig)
 }
 
 func newSystemMessage(chatId int64, text string) tgbotapi.MessageConfig {
 	msg := tgbotapi.NewMessage(chatId, fmt.Sprintf("`%s`", text))
-	msg.ParseMode = tgbotapi.ModeMarkdownV2
+	msg.ParseMode = tgbotapi.ModeMarkdown
 
 	return msg
 }
@@ -275,24 +506,4 @@ func handleImageCommand(message *tgbotapi.Message) {
 
 		bot.SendMediaGroup(mediaGroup)
 	}
-}
-
-func downloadFileByUrl(url string) (*os.File, error) {
-	file, err := os.CreateTemp(os.TempDir(), "voice")
-
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	resp, err := http.Get(url)
-
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	_, err = io.Copy(file, resp.Body)
-
-	return file, err
 }

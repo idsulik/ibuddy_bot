@@ -2,10 +2,32 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
+
+func downloadFileByUrl(url string) (*os.File, error) {
+	file, err := os.CreateTemp(os.TempDir(), "voice")
+
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	resp, err := http.Get(url)
+
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(file, resp.Body)
+
+	return file, err
+}
 
 func convertOggToMp3(oggFilepath string) (mp3Filepath string, err error) {
 	name := filepath.Base(oggFilepath)
