@@ -12,13 +12,13 @@ services:
       - mongodb
   mongodb:
     container_name: mongodb
-    image: mongo:6
-    restart: always
+    image: mongo:5.0
+    restart: on-failure
     env_file:
       - .env
     volumes:
-      - mongodb_data:/data/db
+      - mongo_data:/data/db
 
 volumes:
-  mongodb_data:
-    name: mongodb_data
+  mongo_data:
+    name: mongo_data
