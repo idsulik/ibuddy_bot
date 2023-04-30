@@ -1,0 +1,22 @@
+version: "3.7"
+services:
+  app:
+    container_name: ibuddy
+    build:
+      dockerfile: Dockerfile
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+  mongodb:
+    container_name: mongodb
+    image: mongo:6
+    restart: always
+    volumes:
+    - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
+    name: mongodb_data
