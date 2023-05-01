@@ -133,7 +133,7 @@ func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	text := fmt.Sprintf("User `%s` banned with reason `%s`", user.Username, banReason)
+	text := fmt.Sprintf("User @%s banned with reason `%s`", user.Username, banReason)
 	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	msg.ReplyToMessageID = callbackQuery.Message.MessageID
@@ -142,7 +142,7 @@ func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
 }
 
 func handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.Message.From.UserName != adminUser {
+	if callbackQuery.From.UserName != adminUser {
 		handleUnknownCommand(callbackQuery.Message)
 		return
 	}
@@ -173,7 +173,7 @@ func handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	text := fmt.Sprintf("User `%s` unbanned", user.Username)
+	text := fmt.Sprintf("User @%s unbanned", user.Username)
 	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	msg.ReplyToMessageID = callbackQuery.Message.MessageID
@@ -259,7 +259,7 @@ func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	text := fmt.Sprintf("`%s` chats", user.Username)
+	text := fmt.Sprintf("@%s chats", user.Username)
 	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
@@ -379,9 +379,7 @@ func handleMessage(message *tgbotapi.Message) {
 		if err != nil {
 			log.Println(err)
 
-			msg := newSystemMessage(message.Chat.ID, "Failed, try again")
-			msg.ReplyToMessageID = message.MessageID
-			_, err = bot.Send(msg)
+			newSystemReply(message, "Failed, try again")
 
 			if err != nil {
 				log.Println(err)
@@ -409,21 +407,41 @@ func handleMessage(message *tgbotapi.Message) {
 			responseText = fmt.Sprintf("**voice text**:\n```\n%s\n```\n\n%s", messageText, responseText)
 		}
 
-		msg = tgbotapi.NewMessage(message.Chat.ID, responseText)
-		msg.ParseMode = tgbotapi.ModeMarkdown
-		msg.ReplyToMessageID = message.MessageID
-
-		_, err = bot.Send(msg)
-
-		if err != nil {
-			log.Println(err)
-		}
+		newReplyWithFallback(message, responseText, tgbotapi.ModeMarkdownV2)
 	}
 
 	_, err := bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
 
 	if err != nil {
 		log.Println(err)
+	}
+}
+
+func newReplyWithFallback(message *tgbotapi.Message, responseText string, parseMode string) {
+	msg := tgbotapi.NewMessage(message.Chat.ID, responseText)
+	msg.ParseMode = parseMode
+	msg.ReplyToMessageID = message.MessageID
+
+	_, err := bot.Send(msg)
+
+	if err != nil {
+		log.Println(err)
+
+		if strings.Contains(err.Error(), "can't parse entities") {
+			if parseMode == tgbotapi.ModeMarkdownV2 {
+				newReplyWithFallback(
+					message,
+					responseText,
+					tgbotapi.ModeMarkdown,
+				)
+			} else {
+				newReplyWithFallback(
+					message,
+					responseText,
+					"",
+				)
+			}
+		}
 	}
 }
 
