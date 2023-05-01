@@ -253,6 +253,12 @@ func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
 		}}
 	}
 
+	if len(buttons) == 0 {
+		newSystemReply(callbackQuery.Message, "No chats found")
+
+		return
+	}
+
 	text := fmt.Sprintf("`%s` chats", user.Username)
 	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdown
