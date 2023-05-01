@@ -19,15 +19,18 @@ func (u User) IsBanned() bool {
 }
 
 type Chat struct {
-	Id     primitive.ObjectID `bson:"_id,omitempty"`
-	UserId int64              `bson:"user_id"`
-	Title  string             `bson:"title"`
+	Id       primitive.ObjectID `bson:"_id,omitempty"`
+	UserId   int64              `bson:"user_id"`
+	Username string             `bson:"username"`
+	Title    string             `bson:"title"`
 }
 
 type Message struct {
+	Id         int                `bson:"id"`
 	ChatId     primitive.ObjectID `bson:"chat_id"`
-	ReplyTo    primitive.ObjectID `bson:"reply_to"`
+	ReplyToId  *int               `bson:"reply_to_id"`
 	UserId     int64              `bson:"user_id"`
+	Username   string             `bson:"username"`
 	Role       string             `bson:"role"`
 	Text       string             `bson:"text"`
 	Additional interface{}        `bson:"additional"`

@@ -44,7 +44,7 @@ func main() {
 	telegramToken = os.Getenv(telegramTokenEnvName)
 	chatgptKey := os.Getenv(chatgptKeyEnvName)
 	mongodbUri := os.Getenv(mongoDbUri)
-	debug := os.Getenv(debugEnvName) == "True"
+	debug := os.Getenv(debugEnvName) == "true"
 	adminUser = os.Getenv(adminUserEnvName)
 	client = openai.NewClient(chatgptKey)
 	bot, err = tgbotapi.NewBotAPI(telegramToken)
@@ -92,6 +92,8 @@ func handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 		handleChatSwitchButton(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, "user_chats"):
 		handleUserChatsButton(callbackQuery)
+	case strings.HasPrefix(callbackQuery.Data, "user_chat"):
+		handleUserChatButton(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, "user_ban"):
 		handleUserBanButton(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, "user_unban"):
@@ -100,85 +102,11 @@ func handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 	}
 }
 
-func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
-		return
+func getUserMention(userId int64, username string) string {
+	if username == "" {
+		username = "user"
 	}
-
-	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_ban: ", "", 1), 10, 64)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	user, err := db.GetUserById(userId)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	banReason := "..."
-	user.BanReason = &banReason
-
-	_, err = db.UpdateUser(&user)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	text := fmt.Sprintf("User @%s banned with reason `%s`", user.Username, banReason)
-	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyToMessageID = callbackQuery.Message.MessageID
-
-	bot.Send(msg)
-}
-
-func handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
-		return
-	}
-
-	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_unban: ", "", 1), 10, 64)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	user, err := db.GetUserById(userId)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	user.BanReason = nil
-
-	_, err = db.UpdateUser(&user)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	text := fmt.Sprintf("User @%s unbanned", user.Username)
-	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyToMessageID = callbackQuery.Message.MessageID
-
-	bot.Send(msg)
+	return fmt.Sprintf("[%s](tg://user?id=%d)", username, userId)
 }
 
 func handleChatSwitchButton(callbackQuery *tgbotapi.CallbackQuery) {
@@ -211,61 +139,6 @@ func handleChatSwitchButton(callbackQuery *tgbotapi.CallbackQuery) {
 
 	changeUserActiveChat(&user, chatId)
 	pinMessage(msg.Chat.ID, msg.MessageID)
-}
-
-func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
-		return
-	}
-
-	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_chats: ", "", 1), 10, 64)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	user, err := db.GetUserById(userId)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	chats, err := db.ListUserChats(user.Id)
-
-	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
-
-		return
-	}
-
-	buttons := make([][]tgbotapi.InlineKeyboardButton, len(chats))
-
-	for i, chat := range chats {
-		data := fmt.Sprintf("user_chat: %s", chat.Id.Hex())
-		buttons[i] = []tgbotapi.InlineKeyboardButton{{
-			Text:         chat.Title,
-			CallbackData: &data,
-		}}
-	}
-
-	if len(buttons) == 0 {
-		newSystemReply(callbackQuery.Message, "No chats found")
-
-		return
-	}
-
-	text := fmt.Sprintf("@%s chats", user.Username)
-	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, text)
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
-	msg.ReplyToMessageID = callbackQuery.Message.MessageID
-
-	bot.Send(msg)
 }
 
 func pinMessage(chatId int64, messageId int) {
@@ -322,7 +195,11 @@ func handleMessage(message *tgbotapi.Message) {
 		}
 
 		if user.ActiveChatId == nil {
-			res, err := db.CreateChat(database.Chat{UserId: user.Id, Title: messageText})
+			res, err := db.CreateChat(database.Chat{
+				UserId:   user.Id,
+				Username: user.Username,
+				Title:    messageText,
+			})
 
 			if err != nil {
 				log.Println(err)
@@ -354,12 +231,18 @@ func handleMessage(message *tgbotapi.Message) {
 			}
 		}
 
-		userMessageId, _ := db.InsertMessage(database.Message{
-			ChatId: *user.ActiveChatId,
-			UserId: message.From.ID,
-			Role:   database.RoleUser,
-			Text:   messageText,
+		_, err := db.InsertMessage(database.Message{
+			Id:       message.MessageID,
+			ChatId:   *user.ActiveChatId,
+			UserId:   message.From.ID,
+			Username: message.From.UserName,
+			Role:     database.RoleUser,
+			Text:     messageText,
 		})
+
+		if err != nil {
+			log.Println(err)
+		}
 
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
@@ -390,15 +273,6 @@ func handleMessage(message *tgbotapi.Message) {
 
 		responseText := resp.Choices[0].Message.Content
 
-		_, err = db.InsertMessage(database.Message{
-			ChatId:     *user.ActiveChatId,
-			ReplyTo:    *userMessageId,
-			UserId:     bot.Self.ID,
-			Role:       database.RoleAssistant,
-			Text:       responseText,
-			Additional: resp,
-		})
-
 		if err != nil {
 			log.Println(err)
 		}
@@ -407,7 +281,22 @@ func handleMessage(message *tgbotapi.Message) {
 			responseText = fmt.Sprintf("**voice text**:\n```\n%s\n```\n\n%s", messageText, responseText)
 		}
 
-		newReplyWithFallback(message, responseText, tgbotapi.ModeMarkdownV2)
+		msg, err := newReplyWithFallback(message, responseText, tgbotapi.ModeMarkdownV2)
+
+		if err != nil {
+			log.Println(err)
+		}
+
+		_, err = db.InsertMessage(database.Message{
+			Id:         msg.MessageID,
+			ChatId:     *user.ActiveChatId,
+			ReplyToId:  &message.MessageID,
+			UserId:     bot.Self.ID,
+			Username:   bot.Self.UserName,
+			Role:       database.RoleAssistant,
+			Text:       responseText,
+			Additional: resp,
+		})
 	}
 
 	_, err := bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
@@ -417,25 +306,25 @@ func handleMessage(message *tgbotapi.Message) {
 	}
 }
 
-func newReplyWithFallback(message *tgbotapi.Message, responseText string, parseMode string) {
+func newReplyWithFallback(message *tgbotapi.Message, responseText string, parseMode string) (tgbotapi.Message, error) {
 	msg := tgbotapi.NewMessage(message.Chat.ID, responseText)
 	msg.ParseMode = parseMode
 	msg.ReplyToMessageID = message.MessageID
 
-	_, err := bot.Send(msg)
+	res, err := bot.Send(msg)
 
 	if err != nil {
 		log.Println(err)
 
 		if strings.Contains(err.Error(), "can't parse entities") {
 			if parseMode == tgbotapi.ModeMarkdownV2 {
-				newReplyWithFallback(
+				return newReplyWithFallback(
 					message,
 					responseText,
 					tgbotapi.ModeMarkdown,
 				)
 			} else {
-				newReplyWithFallback(
+				return newReplyWithFallback(
 					message,
 					responseText,
 					"",
@@ -443,6 +332,8 @@ func newReplyWithFallback(message *tgbotapi.Message, responseText string, parseM
 			}
 		}
 	}
+
+	return res, err
 }
 
 func changeUserActiveChat(user *database.User, chatId primitive.ObjectID) {
@@ -498,67 +389,6 @@ func handleNewCommand(message *tgbotapi.Message) {
 func handleStartCommand(message *tgbotapi.Message) {
 	msg := newSystemMessage(message.Chat.ID, "Welcome!")
 	msg.ReplyToMessageID = message.MessageID
-	bot.Send(msg)
-}
-
-func handleAdminCommand(message *tgbotapi.Message) {
-	if message.From.UserName != adminUser {
-		handleUnknownCommand(message)
-		return
-	}
-
-	switch message.CommandArguments() {
-	case "users":
-		handleAdminUsersCommand(message)
-	case "chats":
-		users, _ := db.ListChats()
-		titles := make([]string, len(users))
-
-		for i, user := range users {
-			titles[i] = user.Title
-		}
-
-		bot.Send(tgbotapi.NewMessage(message.Chat.ID, strings.Join(titles, "\n")))
-	}
-}
-
-func handleAdminUsersCommand(message *tgbotapi.Message) {
-	users, _ := db.ListUsers()
-
-	buttons := make([][]tgbotapi.InlineKeyboardButton, len(users))
-
-	for i, user := range users {
-		chatsData := fmt.Sprintf("user_chats: %d", user.Id)
-		banData := fmt.Sprintf("user_ban: %d", user.Id)
-		unbanData := fmt.Sprintf("user_unban: %d", user.Id)
-		var banUnbanBtn tgbotapi.InlineKeyboardButton
-
-		if user.IsBanned() {
-			banUnbanBtn = tgbotapi.InlineKeyboardButton{
-				Text:         "[unban]",
-				CallbackData: &unbanData,
-			}
-		} else {
-			banUnbanBtn = tgbotapi.InlineKeyboardButton{
-				Text:         "[ban]",
-				CallbackData: &banData,
-			}
-		}
-
-		buttons[i] = []tgbotapi.InlineKeyboardButton{{
-			Text:         user.Username,
-			CallbackData: &user.Username,
-		}, {
-			Text:         "[chats]",
-			CallbackData: &chatsData,
-		}, banUnbanBtn}
-	}
-
-	msg := tgbotapi.NewMessage(message.Chat.ID, "Users")
-	msg.ParseMode = tgbotapi.ModeMarkdownV2
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
-	msg.ReplyToMessageID = message.MessageID
-
 	bot.Send(msg)
 }
 
@@ -620,7 +450,7 @@ func handleHistoryCommand(message *tgbotapi.Message) {
 		return
 	}
 
-	var limit int64 = maxChatMessages
+	var limit int64 = 10
 	messages, _ := db.ListChatMessages(*user.ActiveChatId, &limit)
 	ReverseSlice(messages)
 
@@ -633,11 +463,14 @@ func handleHistoryCommand(message *tgbotapi.Message) {
 		}
 	}
 
-	msg := tgbotapi.NewMessage(message.Chat.ID, strings.Join(items, "\n\n"))
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyToMessageID = message.MessageID
+	var text string
 
-	_, err := bot.Send(msg)
+	if len(items) == 10 {
+		text = fmt.Sprintf("Last %d messages:\n %s", limit, strings.Join(items, "\n\n"))
+	} else {
+		text = strings.Join(items, "\n\n")
+	}
+	_, err := newReplyWithFallback(message, text, tgbotapi.ModeMarkdownV2)
 
 	if err != nil {
 		log.Println(err)
