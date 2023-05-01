@@ -140,6 +140,42 @@ func (db *Database) CreateChat(chat Chat) (*mongo.InsertOneResult, error) {
 	)
 }
 
+func (db *Database) ListUsers() ([]User, error) {
+	cur, err := db.client.Database(databaseName).Collection(usersCollectionName).Find(
+		context.Background(),
+		bson.M{},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer cur.Close(context.Background())
+
+	items := make([]User, 0)
+	err = cur.All(context.Background(), &items)
+
+	return items, err
+}
+
+func (db *Database) ListChats() ([]Chat, error) {
+	cur, err := db.client.Database(databaseName).Collection(chatsCollectionName).Find(
+		context.Background(),
+		bson.M{},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer cur.Close(context.Background())
+
+	items := make([]Chat, 0)
+	err = cur.All(context.Background(), &items)
+
+	return items, err
+}
+
 func New(ctx context.Context, uri string) (*Database, error) {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 
