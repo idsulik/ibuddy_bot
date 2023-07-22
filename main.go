@@ -23,7 +23,6 @@ const (
 	debugEnvName         = "DEBUG"
 	adminUserEnvName     = "ADMIN_USER"
 
-	maxTokens       = 400
 	maxChatMessages = 30
 )
 
@@ -159,7 +158,9 @@ func handleMessage(message *tgbotapi.Message) {
 		return
 	}
 
-	msg := newSystemMessage(message.Chat.ID, "Loading...")
+	user := getCurrentUser(message)
+
+	msg := newSystemMessage(message.Chat.ID, getLocalizedText(user.Lang, TextLoading))
 	msg.ReplyMarkup = tgbotapi.ReplyKeyboardRemove{
 		RemoveKeyboard: true,
 	}
@@ -167,10 +168,8 @@ func handleMessage(message *tgbotapi.Message) {
 
 	loadingMsg, _ := bot.Send(msg)
 
-	user := getCurrentUser(message)
-
 	if user.IsBanned() {
-		msg := newSystemMessage(message.Chat.ID, fmt.Sprintf("You're banned: %s", *user.BanReason))
+		msg := newSystemMessage(message.Chat.ID, getLocalizedText(user.Lang, UserBanned, *user.BanReason))
 		msg.ReplyToMessageID = message.MessageID
 
 		_, err := bot.Send(msg)
@@ -187,7 +186,7 @@ func handleMessage(message *tgbotapi.Message) {
 		handleCommandMessage(message)
 	} else {
 		if len(messageText) < 2 {
-			msg := newSystemMessage(message.Chat.ID, "Too short message")
+			msg := newSystemMessage(message.Chat.ID, getLocalizedText(user.Lang, TooShortMessage))
 			msg.ReplyToMessageID = message.MessageID
 			bot.Send(msg)
 
@@ -254,7 +253,7 @@ func handleMessage(message *tgbotapi.Message) {
 			openai.ChatCompletionRequest{
 				Model:     openai.GPT3Dot5Turbo,
 				Messages:  messages,
-				MaxTokens: maxTokens,
+				MaxTokens: user.GetMaxTokens(),
 				User:      strconv.FormatInt(user.Id, 10),
 			},
 		)
@@ -307,6 +306,10 @@ func handleMessage(message *tgbotapi.Message) {
 }
 
 func newReplyWithFallback(message *tgbotapi.Message, responseText string, parseMode string) (tgbotapi.Message, error) {
+	if len(responseText) > 4096 {
+		responseText = responseText[:4096]
+	}
+
 	msg := tgbotapi.NewMessage(message.Chat.ID, responseText)
 	msg.ParseMode = parseMode
 	msg.ReplyToMessageID = message.MessageID
@@ -387,7 +390,8 @@ func handleNewCommand(message *tgbotapi.Message) {
 }
 
 func handleStartCommand(message *tgbotapi.Message) {
-	msg := newSystemMessage(message.Chat.ID, "Welcome!")
+	user := getCurrentUser(message)
+	msg := newSystemMessage(message.Chat.ID, getLocalizedText(user.Lang, WelcomeMessage))
 	msg.ReplyToMessageID = message.MessageID
 	bot.Send(msg)
 }
@@ -395,11 +399,13 @@ func handleStartCommand(message *tgbotapi.Message) {
 func getCurrentUser(message *tgbotapi.Message) database.User {
 	userId := message.From.ID
 	username := message.From.UserName
+	lang := message.From.LanguageCode
 
 	if message.From.IsBot {
 		if message.ReplyToMessage != nil {
 			userId = message.ReplyToMessage.From.ID
 			username = message.ReplyToMessage.From.UserName
+			lang = message.ReplyToMessage.From.LanguageCode
 		}
 	}
 
@@ -407,6 +413,8 @@ func getCurrentUser(message *tgbotapi.Message) database.User {
 		Id:       userId,
 		Username: username,
 	})
+
+	user.Lang = lang
 
 	return user
 }
