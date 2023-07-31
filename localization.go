@@ -15,7 +15,7 @@ var (
 			TextLoading:     "Loading...",
 			UserBanned:      "You're banned: %s",
 			TooShortMessage: "Too short message",
-			WelcomeMessage:  "Welcome!\nSend message to start conversation\nSend `/new` to clear current theme\nSend `/image {description}` to generate images",
+			WelcomeMessage:  "Welcome!\nSend message to start conversation\nSend `/new` to clear current thread\nSend `/image {description}` to generate images",
 		},
 		"ru": {
 			TextLoading:     "Идет загрузка...",

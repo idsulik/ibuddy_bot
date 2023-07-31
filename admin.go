@@ -70,7 +70,11 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg.ReplyToMessageID = message.MessageID
 
-	bot.Send(msg)
+	_, err := bot.Send(msg)
+
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func handleAdminChatsCommand(message *tgbotapi.Message) {
