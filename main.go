@@ -23,7 +23,13 @@ const (
 	debugEnvName         = "DEBUG"
 	adminUserEnvName     = "ADMIN_USER"
 
-	maxChatMessages = 30
+	maxChatMessages = 20
+
+	maximumContextLengthError = "maximum context length"
+)
+
+const (
+	newCommand = "new"
 )
 
 var (
@@ -261,7 +267,11 @@ func handleMessage(message *tgbotapi.Message) {
 		if err != nil {
 			log.Println(err)
 
-			newSystemReply(message, "Failed, try again")
+			if strings.Contains(err.Error(), maximumContextLengthError) {
+				_, err = newSystemReply(message, fmt.Sprintf("Start new context with /%s command", newCommand))
+			} else {
+				_, err = newSystemReply(message, "Failed, try again")
+			}
 
 			if err != nil {
 				log.Println(err)
@@ -350,7 +360,7 @@ func handleCommandMessage(message *tgbotapi.Message) {
 		handleStartCommand(message)
 	case "image":
 		handleImageCommand(message)
-	case "new":
+	case newCommand:
 		handleNewCommand(message)
 	case "chats":
 		handleChatsCommand(message)
