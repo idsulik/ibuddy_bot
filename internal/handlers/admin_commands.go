@@ -1,40 +1,41 @@
-package main
+package handlers
 
 import (
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"ibuddy_bot/database"
+	"ibuddy_bot/internal/models"
+	"ibuddy_bot/internal/util"
 	"log"
 	"strconv"
 	"strings"
 )
 
-func handleAdminCommand(message *tgbotapi.Message) {
-	if message.From.UserName != adminUser {
-		handleUnknownCommand(message)
+func (h *UpdateHandler) handleAdminCommand(message *tgbotapi.Message) {
+	if message.From.UserName != h.adminUser {
+		h.handleUnknownCommand(message)
 		return
 	}
 
 	switch message.CommandArguments() {
 	case "users":
-		handleAdminUsersCommand(message)
+		h.handleAdminUsersCommand(message)
 	case "chats":
-		handleAdminChatsCommand(message)
+		h.handleAdminChatsCommand(message)
 	default:
-		handleAdminDefaultCommand(message)
+		h.handleAdminDefaultCommand(message)
 	}
 }
 
-func handleAdminDefaultCommand(message *tgbotapi.Message) {
+func (h *UpdateHandler) handleAdminDefaultCommand(message *tgbotapi.Message) {
 	text := fmt.Sprintf("`/admin users`\n`/admin chats`\n")
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdownV2
-	bot.Send(msg)
+	h.bot.Send(msg)
 }
 
-func handleAdminUsersCommand(message *tgbotapi.Message) {
-	users, err := db.ListUsers()
+func (h *UpdateHandler) handleAdminUsersCommand(message *tgbotapi.Message) {
+	users, err := h.storage.ListUsers()
 	if err != nil {
 		log.Println("Error fetching users:", err)
 		return
@@ -68,14 +69,14 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg.ReplyToMessageID = message.MessageID
 
-	_, err = bot.Send(msg)
+	_, err = h.bot.Send(msg)
 	if err != nil {
 		log.Println("Error sending message:", err)
 	}
 }
 
-func handleAdminChatsCommand(message *tgbotapi.Message) {
-	chats, _ := db.ListChats()
+func (h *UpdateHandler) handleAdminChatsCommand(message *tgbotapi.Message) {
+	chats, _ := h.storage.ListChats()
 	buttons := make([][]tgbotapi.InlineKeyboardButton, len(chats))
 
 	for i, chat := range chats {
@@ -96,43 +97,48 @@ func handleAdminChatsCommand(message *tgbotapi.Message) {
 		}}
 	}
 
+	if len(buttons) == 0 {
+		h.newSystemReply(message, "No chats found")
+
+		return
+	}
 	msg := tgbotapi.NewMessage(message.Chat.ID, "Chats")
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg.ReplyToMessageID = message.MessageID
 
-	_, err := bot.Send(msg)
+	_, err := h.bot.Send(msg)
 
 	if err != nil {
 		log.Println(err)
 	}
 }
 
-func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
+func (h *UpdateHandler) handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
+	if callbackQuery.From.UserName != h.adminUser {
+		h.handleUnknownCommand(callbackQuery.Message)
 		return
 	}
 
 	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_chats: ", "", 1), 10, 64)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
-	user, err := db.GetUserById(userId)
+	user, err := h.storage.GetUserById(userId)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
-	chats, err := db.ListUserChats(user.Id)
+	chats, err := h.storage.ListUserChats(user.Id)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
@@ -152,7 +158,7 @@ func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
 	}
 
 	if len(buttons) == 0 {
-		newSystemReply(callbackQuery.Message, "No chats found")
+		h.newSystemReply(callbackQuery.Message, "No chats found")
 
 		return
 	}
@@ -162,65 +168,65 @@ func handleUserChatsButton(callbackQuery *tgbotapi.CallbackQuery) {
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg.ReplyToMessageID = callbackQuery.Message.MessageID
 
-	_, err = bot.Send(msg)
+	_, err = h.bot.Send(msg)
 
 	if err != nil {
 		log.Println(err)
 	}
 }
 
-func handleUserChatButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
+func (h *UpdateHandler) handleUserChatButton(callbackQuery *tgbotapi.CallbackQuery) {
+	if callbackQuery.From.UserName != h.adminUser {
+		h.handleUnknownCommand(callbackQuery.Message)
 		return
 	}
 
 	chatId, err := primitive.ObjectIDFromHex(strings.Replace(callbackQuery.Data, "user_chat: ", "", 1))
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
 	var limit int64 = 50
-	messages, _ := db.ListChatMessages(chatId, &limit)
-	ReverseSlice(messages)
+	messages, _ := h.storage.ListChatMessages(chatId, &limit)
+	util.ReverseSlice(messages)
 
 	items := make([]string, len(messages))
 	for i, msg := range messages {
-		if msg.Role == database.RoleUser {
-			items[i] = fmt.Sprintf("%s:\n%s", getUserMention(msg.UserId, msg.Username), msg.Text)
+		if msg.Role == models.RoleUser {
+			items[i] = fmt.Sprintf("%s:\n%s", util.GetUserMention(msg.UserId, msg.Username), msg.Text)
 		} else {
 			items[i] = fmt.Sprintf("`Assistant's answer`:\n%s", msg.Text)
 		}
 	}
 
-	_, err = newReplyWithFallback(callbackQuery.Message, strings.Join(items, "\n\n"), tgbotapi.ModeMarkdownV2)
+	_, err = h.newReplyWithFallback(callbackQuery.Message, strings.Join(items, "\n\n"), tgbotapi.ModeMarkdownV2)
 
 	if err != nil {
 		log.Println(err)
 	}
 }
 
-func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
+func (h *UpdateHandler) handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
+	if callbackQuery.From.UserName != h.adminUser {
+		h.handleUnknownCommand(callbackQuery.Message)
 		return
 	}
 
 	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_ban: ", "", 1), 10, 64)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
-	user, err := db.GetUserById(userId)
+	user, err := h.storage.GetUserById(userId)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
@@ -228,10 +234,10 @@ func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
 	banReason := "..."
 	user.BanReason = &banReason
 
-	_, err = db.UpdateUser(&user)
+	_, err = h.storage.UpdateUser(&user)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
@@ -241,37 +247,37 @@ func handleUserBanButton(callbackQuery *tgbotapi.CallbackQuery) {
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	msg.ReplyToMessageID = callbackQuery.Message.MessageID
 
-	bot.Send(msg)
+	h.bot.Send(msg)
 }
 
-func handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
-	if callbackQuery.From.UserName != adminUser {
-		handleUnknownCommand(callbackQuery.Message)
+func (h *UpdateHandler) handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
+	if callbackQuery.From.UserName != h.adminUser {
+		h.handleUnknownCommand(callbackQuery.Message)
 		return
 	}
 
 	userId, err := strconv.ParseInt(strings.Replace(callbackQuery.Data, "user_unban: ", "", 1), 10, 64)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
-	user, err := db.GetUserById(userId)
+	user, err := h.storage.GetUserById(userId)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
 
 	user.BanReason = nil
 
-	_, err = db.UpdateUser(&user)
+	_, err = h.storage.UpdateUser(&user)
 
 	if err != nil {
-		newSystemReply(callbackQuery.Message, err.Error())
+		h.newSystemReply(callbackQuery.Message, err.Error())
 
 		return
 	}
@@ -281,5 +287,5 @@ func handleUserUnbanButton(callbackQuery *tgbotapi.CallbackQuery) {
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	msg.ReplyToMessageID = callbackQuery.Message.MessageID
 
-	bot.Send(msg)
+	h.bot.Send(msg)
 }

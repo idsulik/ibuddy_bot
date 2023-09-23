@@ -1,4 +1,4 @@
-package main
+package localization
 
 import "fmt"
 
@@ -26,7 +26,7 @@ var (
 	}
 )
 
-func getLocalizedText(lang string, textId string, args ...interface{}) string {
+func GetLocalizedText(lang string, textId string, args ...interface{}) string {
 	if _, ok := messages[lang][textId]; !ok {
 		lang = "en"
 	}

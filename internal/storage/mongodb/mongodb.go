@@ -1,4 +1,4 @@
-package database
+package mongodb
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"ibuddy_bot/internal/models"
 )
 
 const (
@@ -16,25 +17,60 @@ const (
 	messagesCollectionName = "messages"
 )
 
-type Database struct {
+type Mongo struct {
 	client *mongo.Client
 }
 
-func (db *Database) Init() error {
+func New(ctx context.Context, uri string) (*Mongo, error) {
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+
+	if err != nil {
+		return nil, err
+	}
+
+	err = client.Ping(ctx, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &Mongo{
+		client: client,
+	}, nil
+}
+
+func Init(ctx context.Context, db *Mongo) error {
 	var err error
-	err = db.client.Database(databaseName).CreateCollection(context.Background(), usersCollectionName)
-	err = db.client.Database(databaseName).CreateCollection(context.Background(), chatsCollectionName)
-	err = db.client.Database(databaseName).CreateCollection(context.Background(), messagesCollectionName)
+	collections, err := db.client.Database(databaseName).ListCollectionNames(ctx, bson.M{})
+
+	if err != nil {
+		return err
+	}
+
+	collectionMap := make(map[string]bool)
+	for _, name := range collections {
+		collectionMap[name] = true
+	}
+
+	if !collectionMap[usersCollectionName] {
+		err = db.client.Database(databaseName).CreateCollection(context.Background(), usersCollectionName)
+	}
+	if !collectionMap[chatsCollectionName] {
+		err = db.client.Database(databaseName).CreateCollection(context.Background(), chatsCollectionName)
+	}
+	if !collectionMap[messagesCollectionName] {
+		err = db.client.Database(databaseName).CreateCollection(context.Background(), messagesCollectionName)
+	}
 
 	return err
 }
 
-func (db *Database) Disconnect(ctx context.Context) error {
+func (db *Mongo) Disconnect(ctx context.Context) error {
 	return db.client.Disconnect(ctx)
 }
 
-func (db *Database) GetUserById(userId int64) (User, error) {
-	var result User
+func (db *Mongo) GetUserById(userId int64) (models.User, error) {
+	var result models.User
 
 	err := db.client.Database(databaseName).Collection(usersCollectionName).FindOne(
 		context.Background(),
@@ -44,7 +80,7 @@ func (db *Database) GetUserById(userId int64) (User, error) {
 	return result, err
 }
 
-func (db *Database) GetOrCreateUser(userId int64, newUser *User) (User, error) {
+func (db *Mongo) GetOrCreateUser(userId int64, newUser *models.User) (models.User, error) {
 	user, err := db.GetUserById(userId)
 
 	if errors.Is(err, mongo.ErrNoDocuments) {
@@ -55,11 +91,11 @@ func (db *Database) GetOrCreateUser(userId int64, newUser *User) (User, error) {
 	return user, err
 }
 
-func (db *Database) CreateUser(user *User) (*mongo.InsertOneResult, error) {
+func (db *Mongo) CreateUser(user *models.User) (*mongo.InsertOneResult, error) {
 	return db.client.Database(databaseName).Collection(usersCollectionName).InsertOne(context.Background(), user)
 }
 
-func (db *Database) UpdateUser(user *User) (*mongo.UpdateResult, error) {
+func (db *Mongo) UpdateUser(user *models.User) (*mongo.UpdateResult, error) {
 	return db.client.Database(databaseName).Collection(usersCollectionName).ReplaceOne(
 		context.Background(),
 		bson.M{"id": user.Id},
@@ -67,8 +103,8 @@ func (db *Database) UpdateUser(user *User) (*mongo.UpdateResult, error) {
 	)
 }
 
-func (db *Database) GetChatById(chatId primitive.ObjectID) (Chat, error) {
-	var result Chat
+func (db *Mongo) GetChatById(chatId primitive.ObjectID) (models.Chat, error) {
+	var result models.Chat
 
 	err := db.client.Database(databaseName).Collection(chatsCollectionName).FindOne(
 		context.Background(),
@@ -78,7 +114,7 @@ func (db *Database) GetChatById(chatId primitive.ObjectID) (Chat, error) {
 	return result, err
 }
 
-func (db *Database) ListUserChats(id int64) ([]Chat, error) {
+func (db *Mongo) ListUserChats(id int64) ([]models.Chat, error) {
 	cur, err := db.client.Database(databaseName).Collection(chatsCollectionName).Find(
 		context.Background(),
 		bson.M{"user_id": id},
@@ -90,13 +126,13 @@ func (db *Database) ListUserChats(id int64) ([]Chat, error) {
 
 	defer cur.Close(context.Background())
 
-	items := make([]Chat, 0)
+	items := make([]models.Chat, 0)
 	err = cur.All(context.Background(), &items)
 
 	return items, err
 }
 
-func (db *Database) ListChatMessages(id primitive.ObjectID, limit *int64) ([]Message, error) {
+func (db *Mongo) ListChatMessages(id primitive.ObjectID, limit *int64) ([]models.Message, error) {
 	cur, err := db.client.Database(databaseName).Collection(messagesCollectionName).Find(
 		context.Background(),
 		bson.M{"chat_id": id},
@@ -112,13 +148,13 @@ func (db *Database) ListChatMessages(id primitive.ObjectID, limit *int64) ([]Mes
 
 	defer cur.Close(context.Background())
 
-	items := make([]Message, 0)
+	items := make([]models.Message, 0)
 	err = cur.All(context.Background(), &items)
 
 	return items, err
 }
 
-func (db *Database) InsertMessage(message Message) (*primitive.ObjectID, error) {
+func (db *Mongo) InsertMessage(message models.Message) (*primitive.ObjectID, error) {
 	res, err := db.client.Database(databaseName).Collection(messagesCollectionName).InsertOne(
 		context.Background(),
 		message,
@@ -133,14 +169,14 @@ func (db *Database) InsertMessage(message Message) (*primitive.ObjectID, error) 
 	return &id, nil
 }
 
-func (db *Database) CreateChat(chat Chat) (*mongo.InsertOneResult, error) {
+func (db *Mongo) CreateChat(chat models.Chat) (*mongo.InsertOneResult, error) {
 	return db.client.Database(databaseName).Collection(chatsCollectionName).InsertOne(
 		context.Background(),
 		chat,
 	)
 }
 
-func (db *Database) ListUsers() ([]User, error) {
+func (db *Mongo) ListUsers() ([]models.User, error) {
 	cur, err := db.client.Database(databaseName).Collection(usersCollectionName).Find(
 		context.Background(),
 		bson.M{},
@@ -152,13 +188,13 @@ func (db *Database) ListUsers() ([]User, error) {
 
 	defer cur.Close(context.Background())
 
-	items := make([]User, 0)
+	items := make([]models.User, 0)
 	err = cur.All(context.Background(), &items)
 
 	return items, err
 }
 
-func (db *Database) ListChats() ([]Chat, error) {
+func (db *Mongo) ListChats() ([]models.Chat, error) {
 	cur, err := db.client.Database(databaseName).Collection(chatsCollectionName).Find(
 		context.Background(),
 		bson.M{},
@@ -170,20 +206,8 @@ func (db *Database) ListChats() ([]Chat, error) {
 
 	defer cur.Close(context.Background())
 
-	items := make([]Chat, 0)
+	items := make([]models.Chat, 0)
 	err = cur.All(context.Background(), &items)
 
 	return items, err
-}
-
-func New(ctx context.Context, uri string) (*Database, error) {
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &Database{
-		client: client,
-	}, nil
 }
