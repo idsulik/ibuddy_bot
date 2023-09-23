@@ -34,7 +34,11 @@ func handleAdminDefaultCommand(message *tgbotapi.Message) {
 }
 
 func handleAdminUsersCommand(message *tgbotapi.Message) {
-	users, _ := db.ListUsers()
+	users, err := db.ListUsers()
+	if err != nil {
+		log.Println("Error fetching users:", err)
+		return
+	}
 
 	buttons := make([][]tgbotapi.InlineKeyboardButton, len(users))
 
@@ -42,27 +46,20 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 		chatsData := fmt.Sprintf("user_chats: %d", user.Id)
 		banData := fmt.Sprintf("user_ban: %d", user.Id)
 		unbanData := fmt.Sprintf("user_unban: %d", user.Id)
+
 		var banUnbanBtn tgbotapi.InlineKeyboardButton
 
 		if user.IsBanned() {
-			banUnbanBtn = tgbotapi.InlineKeyboardButton{
-				Text:         "[unban]",
-				CallbackData: &unbanData,
-			}
+			banUnbanBtn = tgbotapi.NewInlineKeyboardButtonData("[unban]", unbanData)
 		} else {
-			banUnbanBtn = tgbotapi.InlineKeyboardButton{
-				Text:         "[ban]",
-				CallbackData: &banData,
-			}
+			banUnbanBtn = tgbotapi.NewInlineKeyboardButtonData("[ban]", banData)
 		}
 
-		buttons[i] = []tgbotapi.InlineKeyboardButton{{
-			Text:         user.Username,
-			CallbackData: &user.Username,
-		}, {
-			Text:         "[chats]",
-			CallbackData: &chatsData,
-		}, banUnbanBtn}
+		buttons[i] = []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData(user.Username, user.Username),
+			tgbotapi.NewInlineKeyboardButtonData("[chats]", chatsData),
+			banUnbanBtn,
+		}
 	}
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, "Users")
@@ -70,10 +67,9 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg.ReplyToMessageID = message.MessageID
 
-	_, err := bot.Send(msg)
-
+	_, err = bot.Send(msg)
 	if err != nil {
-		log.Println(err)
+		log.Println("Error sending message:", err)
 	}
 }
 
