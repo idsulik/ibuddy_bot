@@ -46,6 +46,7 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 		chatsData := fmt.Sprintf("user_chats: %d", user.Id)
 		banData := fmt.Sprintf("user_ban: %d", user.Id)
 		unbanData := fmt.Sprintf("user_unban: %d", user.Id)
+		userIdData := fmt.Sprintf("user_info: %d", user.Id)
 
 		var banUnbanBtn tgbotapi.InlineKeyboardButton
 
@@ -56,7 +57,7 @@ func handleAdminUsersCommand(message *tgbotapi.Message) {
 		}
 
 		buttons[i] = []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData(user.Username, user.Username),
+			tgbotapi.NewInlineKeyboardButtonData(user.Username, userIdData),
 			tgbotapi.NewInlineKeyboardButtonData("[chats]", chatsData),
 			banUnbanBtn,
 		}
