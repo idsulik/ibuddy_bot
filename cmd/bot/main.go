@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/joho/godotenv"
-	"github.com/sashabaranov/go-openai"
-	"ibuddy_bot/internal/handlers"
-	"ibuddy_bot/internal/storage/mongodb"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/joho/godotenv"
+	"ibuddy_bot/internal/handlers/admin"
+	"ibuddy_bot/internal/handlers/user"
+	"ibuddy_bot/internal/middleware"
+	"ibuddy_bot/internal/storage/mongodb"
+	"ibuddy_bot/pkg/openaiclient"
+	"ibuddy_bot/pkg/tgbotclient"
 )
 
 const (
@@ -20,6 +24,8 @@ const (
 	mongoDbUri           = "MONGODB_URI"
 	debugEnvName         = "DEBUG"
 	adminUserEnvName     = "ADMIN_USER"
+
+	workerCount = 3
 )
 
 func main() {
@@ -34,8 +40,8 @@ func main() {
 	mongodbUri := os.Getenv(mongoDbUri)
 	debug := os.Getenv(debugEnvName) == "true"
 	adminUser := os.Getenv(adminUserEnvName)
-	client := openai.NewClient(chatgptKey)
-	bot, err := tgbotapi.NewBotAPI(telegramToken)
+	openAiClient := openaiclient.NewOpenAiClient(chatgptKey)
+	tgBotClient, err := tgbotclient.NewTgBotClient(telegramToken, debug)
 
 	if err != nil {
 		log.Fatal(err)
@@ -54,32 +60,37 @@ func main() {
 		log.Fatal(err)
 	}
 
-	defer storage.Disconnect(ctx)
+	log.Printf("Authorized on account %s", tgBotClient.Self.UserName)
 
-	bot.Debug = debug
+	adminHandler := admin.NewHandler(tgBotClient, openAiClient, storage, telegramToken, adminUser)
+	userHandler := user.NewHandler(tgBotClient, openAiClient, storage, telegramToken, adminUser)
 
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	adminMiddleware := middleware.AdminMiddleware(adminUser, adminHandler, userHandler)
+	banCheckMiddleware := middleware.BanCheckMiddleware(tgBotClient, adminMiddleware)
+	currentUserMiddleware := middleware.CurrentUserMiddleware(storage, banCheckMiddleware)
 
-	updateHandler := handlers.NewUpdateHandler(bot, client, storage, telegramToken, adminUser)
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-	updateChan := bot.GetUpdatesChan(u)
+	updateChan := tgBotClient.GetUpdatesChan(u)
 
-	go func() {
-		for {
-			select {
-			case update := <-updateChan:
-				updateHandler.HandleUpdate(&update)
-			case <-ctx.Done():
-				return
+	for i := 0; i < workerCount; i++ {
+		go func(ctx context.Context) {
+			for {
+				select {
+				case update := <-updateChan:
+					currentUserMiddleware(ctx, &update)
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}(ctx)
+	}
 
 	quitChannel := make(chan os.Signal, 1)
 	signal.Notify(quitChannel, syscall.SIGINT, syscall.SIGTERM)
 	<-quitChannel
 
+	storage.Disconnect(ctx)
 	cancel()
 
 	fmt.Println("Adios!")
