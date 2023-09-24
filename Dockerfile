@@ -4,9 +4,8 @@ WORKDIR /app
 COPY go.mod ./
 COPY go.sum ./
 RUN go mod download
-COPY *.go ./
-COPY database/*.go ./database/
-RUN go build -o /goapp
+COPY . .
+RUN go build -o /goapp ./cmd/bot
 
 FROM alpine
 RUN apk add  --no-cache ffmpeg
