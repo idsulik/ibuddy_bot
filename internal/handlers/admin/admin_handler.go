@@ -30,26 +30,21 @@ const (
 )
 
 type Handler struct {
-	bot           *tgbotclient.TgBotClient
-	client        *openaiclient.OpenAiClient
-	storage       storage.Storage
-	telegramToken string
-	adminUser     string
+	bot       *tgbotclient.TgBotClient
+	client    *openaiclient.OpenAiClient
+	storage   storage.Storage
+	adminUser string
 }
 
 func NewHandler(
 	bot *tgbotclient.TgBotClient,
 	client *openaiclient.OpenAiClient,
 	storage storage.Storage,
-	telegramToken string,
-	adminUser string,
 ) *Handler {
 	return &Handler{
-		bot:           bot,
-		client:        client,
-		storage:       storage,
-		telegramToken: telegramToken,
-		adminUser:     adminUser,
+		bot:     bot,
+		client:  client,
+		storage: storage,
 	}
 }
 

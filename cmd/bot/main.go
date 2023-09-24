@@ -62,12 +62,12 @@ func main() {
 
 	log.Printf("Authorized on account %s", tgBotClient.Self.UserName)
 
-	adminHandler := admin.NewHandler(tgBotClient, openAiClient, storage, telegramToken, adminUser)
-	userHandler := user.NewHandler(tgBotClient, openAiClient, storage, telegramToken, adminUser)
+	adminHandler := admin.NewHandler(tgBotClient, openAiClient, storage)
+	userHandler := user.NewHandler(tgBotClient, openAiClient, storage)
 
-	adminMiddleware := middleware.AdminMiddleware(adminUser, adminHandler, userHandler)
+	adminMiddleware := middleware.AdminMiddleware(adminHandler, userHandler)
 	banCheckMiddleware := middleware.BanCheckMiddleware(tgBotClient, adminMiddleware)
-	currentUserMiddleware := middleware.CurrentUserMiddleware(storage, banCheckMiddleware)
+	currentUserMiddleware := middleware.CurrentUserMiddleware(storage, adminUser, banCheckMiddleware)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60

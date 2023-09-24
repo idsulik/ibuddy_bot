@@ -25,6 +25,7 @@ func extractReplyToMessage(update *tgbotapi.Update) *tgbotapi.Message {
 
 func CurrentUserMiddleware(
 	storage storage.Storage,
+	adminUser string,
 	next func(context.Context, *tgbotapi.Update, *models.User),
 ) func(context.Context, *tgbotapi.Update) {
 	return func(ctx context.Context, update *tgbotapi.Update) {
@@ -56,6 +57,7 @@ func CurrentUserMiddleware(
 		}
 
 		user.Lang = lang
+		user.Admin = user.Username == adminUser
 		next(ctx, update, &user)
 	}
 }

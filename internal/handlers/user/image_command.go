@@ -10,7 +10,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-func (h *Handler) handleImageCommand(message *tgbotapi.Message) {
+func (h *Handler) handleImageCommand(ctx context.Context, message *tgbotapi.Message) {
 	prompt := strings.TrimSpace(strings.ReplaceAll(message.Text, "/image", ""))
 
 	if len(prompt) < 3 {
@@ -19,7 +19,7 @@ func (h *Handler) handleImageCommand(message *tgbotapi.Message) {
 		h.bot.Send(msg)
 	} else {
 		resp, err := h.client.CreateImage(
-			context.Background(),
+			ctx,
 			openai.ImageRequest{
 				Prompt:         prompt,
 				Size:           openai.CreateImageSize256x256,

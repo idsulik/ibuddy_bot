@@ -10,12 +10,11 @@ import (
 )
 
 func AdminMiddleware(
-	adminUser string,
 	adminHandler *admin.Handler,
 	userHandler *user.Handler,
 ) func(context.Context, *tgbotapi.Update, *models.User) {
 	return func(ctx context.Context, update *tgbotapi.Update, user *models.User) {
-		if user.Username == adminUser && adminHandler.IsAdminUpdate(update) {
+		if user.IsAdmin() && adminHandler.IsAdminUpdate(update) {
 			adminHandler.HandleUpdate(ctx, update)
 		} else {
 			userHandler.HandleUpdate(ctx, update, user)

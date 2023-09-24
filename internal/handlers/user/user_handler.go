@@ -24,7 +24,6 @@ type Handler struct {
 	client        *openaiclient.OpenAiClient
 	storage       storage.Storage
 	telegramToken string
-	adminUser     string
 	currentUser   *models.User
 }
 
@@ -32,15 +31,11 @@ func NewHandler(
 	bot *tgbotclient.TgBotClient,
 	client *openaiclient.OpenAiClient,
 	storage storage.Storage,
-	telegramToken string,
-	adminUser string,
 ) *Handler {
 	return &Handler{
-		bot:           bot,
-		client:        client,
-		storage:       storage,
-		telegramToken: telegramToken,
-		adminUser:     adminUser,
+		bot:     bot,
+		client:  client,
+		storage: storage,
 	}
 }
 
@@ -48,7 +43,11 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *tgbotapi.Update, cur
 	h.setCurrentUser(currentUser)
 
 	if update.Message != nil {
-		h.handleMessage(ctx, update.Message)
+		if update.Message.IsCommand() {
+			h.handleCommandMessage(ctx, update.Message)
+		} else {
+			h.handleMessage(ctx, update.Message)
+		}
 	} else if update.CallbackQuery != nil {
 		h.handleCallbackQuery(ctx, update.CallbackQuery)
 	} else {
@@ -67,159 +66,151 @@ func (h *Handler) handleMessage(ctx context.Context, message *tgbotapi.Message) 
 		return
 	}
 
+	var err error
 	user := h.getCurrentUser()
 
-	msg := h.newSystemMessage(message.Chat.ID, localization.GetLocalizedText(user.Lang, localization.TextLoading))
-	msg.ReplyMarkup = tgbotapi.ReplyKeyboardRemove{
-		RemoveKeyboard: true,
-	}
-	msg.ReplyToMessageID = message.MessageID
-
-	loadingMsg, _ := h.bot.Send(msg)
+	loadingMsg, _ := h.bot.SendLoadingReply(message, h.getCurrentUser().Lang)
+	defer h.bot.DeleteMessage(&loadingMsg)
 
 	messageText := strings.TrimSpace(message.Text)
-	if message.IsCommand() {
-		h.handleCommandMessage(ctx, message)
-	} else {
-		if len(messageText) < 2 {
-			msg := h.newSystemMessage(
-				message.Chat.ID,
-				localization.GetLocalizedText(user.Lang, localization.TooShortMessage),
-			)
-			msg.ReplyToMessageID = message.MessageID
-			h.bot.Send(msg)
-
-			return
-		}
-
-		if user.ActiveChatId == nil {
-			res, err := h.storage.CreateChat(
-				ctx,
-				models.Chat{
-					UserId:   user.Id,
-					Username: user.Username,
-					Title:    messageText,
-				},
-			)
-
-			if err != nil {
-				log.Println(err)
-			} else {
-				v, _ := res.InsertedID.(primitive.ObjectID)
-				h.changeUserActiveChat(ctx, user, v)
-				h.bot.PinMessage(message.Chat.ID, message.MessageID)
-			}
-		}
-
-		isVoiceText := false
-		voiceText := h.extractVoiceText(message)
-
-		if voiceText != "" {
-			isVoiceText = true
-			messageText = voiceText
-		}
-
-		var limit int64 = maxChatMessages
-		activeChatMessages, _ := h.storage.ListChatMessages(ctx, *user.ActiveChatId, &limit)
-		util.ReverseSlice(activeChatMessages)
-
-		messages := make([]openai.ChatCompletionMessage, len(activeChatMessages))
-
-		for i, msg := range activeChatMessages {
-			messages[i] = openai.ChatCompletionMessage{
-				Role:    msg.Role,
-				Content: msg.Text,
-			}
-		}
-
-		_, err := h.storage.InsertMessage(
-			ctx,
-			models.Message{
-				Id:       message.MessageID,
-				ChatId:   *user.ActiveChatId,
-				UserId:   message.From.ID,
-				Username: message.From.UserName,
-				Role:     models.RoleUser,
-				Text:     messageText,
-			},
+	if len(messageText) < 2 {
+		msg := h.newSystemMessage(
+			message.Chat.ID,
+			localization.GetLocalizedText(user.Lang, localization.TooShortMessage),
 		)
-
+		msg.ReplyToMessageID = message.MessageID
+		_, err := h.bot.Send(msg)
 		if err != nil {
 			log.Println(err)
 		}
 
-		messages = append(
-			messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleUser,
-				Content: messageText,
-			},
-		)
-
-		resp, err := h.client.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model:     openai.GPT3Dot5Turbo,
-				Messages:  messages,
-				MaxTokens: user.GetMaxTokens(),
-				User:      strconv.FormatInt(user.Id, 10),
-			},
-		)
-
-		if err != nil {
-			log.Println(err)
-
-			if strings.Contains(err.Error(), maximumContextLengthError) {
-				_, err = h.newSystemReply(message, fmt.Sprintf("Start new context with /new command"))
-			} else {
-				_, err = h.newSystemReply(message, "Failed, try again")
-			}
-
-			if err != nil {
-				log.Println(err)
-			}
-
-			return
-		}
-
-		responseText := resp.Choices[0].Message.Content
-
-		if err != nil {
-			log.Println(err)
-		}
-
-		if isVoiceText {
-			responseText = fmt.Sprintf("**voice text**:\n```\n%s\n```\n\n%s", messageText, responseText)
-		}
-
-		msg, err := h.newReplyWithFallback(message, responseText, tgbotapi.ModeMarkdownV2)
-
-		if err != nil {
-			log.Println(err)
-		}
-
-		_, err = h.storage.InsertMessage(
-			ctx,
-			models.Message{
-				Id:         msg.MessageID,
-				ChatId:     *user.ActiveChatId,
-				ReplyToId:  &message.MessageID,
-				UserId:     h.bot.Self.ID,
-				Username:   h.bot.Self.UserName,
-				Role:       models.RoleAssistant,
-				Text:       responseText,
-				Additional: resp,
-			},
-		)
+		return
 	}
 
-	_, err := h.bot.Send(tgbotapi.NewDeleteMessage(message.Chat.ID, loadingMsg.MessageID))
+	if user.ActiveChatId == nil {
+		res, err := h.storage.CreateChat(
+			ctx,
+			models.Chat{
+				UserId:   user.Id,
+				Username: user.Username,
+				Title:    messageText,
+			},
+		)
+
+		if err != nil {
+			log.Println(err)
+		} else {
+			v, _ := res.InsertedID.(primitive.ObjectID)
+			h.changeUserActiveChat(ctx, user, v)
+			_, err := h.bot.PinMessage(message.Chat.ID, message.MessageID)
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	}
+
+	isVoiceText := false
+	voiceText := h.extractVoiceText(ctx, message)
+
+	if voiceText != "" {
+		isVoiceText = true
+		messageText = voiceText
+	}
+
+	var limit int64 = maxChatMessages
+	activeChatMessages, _ := h.storage.ListChatMessages(ctx, *user.ActiveChatId, &limit)
+	util.ReverseSlice(activeChatMessages)
+
+	messages := make([]openai.ChatCompletionMessage, len(activeChatMessages))
+
+	for i, msg := range activeChatMessages {
+		messages[i] = openai.ChatCompletionMessage{
+			Role:    msg.Role,
+			Content: msg.Text,
+		}
+	}
+
+	_, err = h.storage.InsertMessage(
+		ctx,
+		models.Message{
+			Id:       message.MessageID,
+			ChatId:   *user.ActiveChatId,
+			UserId:   message.From.ID,
+			Username: message.From.UserName,
+			Role:     models.RoleUser,
+			Text:     messageText,
+		},
+	)
 
 	if err != nil {
 		log.Println(err)
 	}
+
+	messages = append(
+		messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: messageText,
+		},
+	)
+
+	resp, err := h.client.CreateChatCompletion(
+		ctx,
+		openai.ChatCompletionRequest{
+			Model:     openai.GPT3Dot5Turbo,
+			Messages:  messages,
+			MaxTokens: user.GetMaxTokens(),
+			User:      strconv.FormatInt(user.Id, 10),
+		},
+	)
+
+	if err != nil {
+		log.Println(err)
+
+		if strings.Contains(err.Error(), maximumContextLengthError) {
+			_, err = h.newSystemReply(message, fmt.Sprintf("Start new context with /new command"))
+		} else {
+			_, err = h.newSystemReply(message, "Failed, try again")
+		}
+
+		if err != nil {
+			log.Println(err)
+		}
+
+		return
+	}
+
+	responseText := resp.Choices[0].Message.Content
+
+	if err != nil {
+		log.Println(err)
+	}
+
+	if isVoiceText {
+		responseText = fmt.Sprintf("**voice text**:\n```\n%s\n```\n\n%s", messageText, responseText)
+	}
+
+	msg, err := h.newReplyWithFallback(message, responseText, tgbotapi.ModeMarkdownV2)
+
+	if err != nil {
+		log.Println(err)
+	}
+
+	_, err = h.storage.InsertMessage(
+		ctx,
+		models.Message{
+			Id:         msg.MessageID,
+			ChatId:     *user.ActiveChatId,
+			ReplyToId:  &message.MessageID,
+			UserId:     h.bot.Self.ID,
+			Username:   h.bot.Self.UserName,
+			Role:       models.RoleAssistant,
+			Text:       responseText,
+			Additional: resp,
+		},
+	)
 }
 
-func (h *Handler) extractVoiceText(message *tgbotapi.Message) string {
+func (h *Handler) extractVoiceText(ctx context.Context, message *tgbotapi.Message) string {
 	fileId := ""
 	if message.Voice != nil {
 		fileId = message.Voice.FileID
@@ -229,13 +220,7 @@ func (h *Handler) extractVoiceText(message *tgbotapi.Message) string {
 		return ""
 	}
 
-	file, err := h.bot.GetFile(
-		tgbotapi.FileConfig{
-			FileID: fileId,
-		},
-	)
-
-	fileUrl := file.Link(h.telegramToken)
+	fileUrl, err := h.bot.GetFileDirectURL(fileId)
 	localFile, err := util.DownloadFileByUrl(fileUrl)
 	defer os.Remove(localFile.Name())
 	mp3FilePath, err := util.ConvertOggToMp3(localFile.Name())
@@ -251,7 +236,7 @@ func (h *Handler) extractVoiceText(message *tgbotapi.Message) string {
 	}
 
 	resp, err := h.client.CreateTranscription(
-		context.Background(),
+		ctx,
 		openai.AudioRequest{
 			Model:    openai.Whisper1,
 			FilePath: mp3FilePath,
@@ -271,11 +256,14 @@ func (h *Handler) extractVoiceText(message *tgbotapi.Message) string {
 }
 
 func (h *Handler) handleCommandMessage(ctx context.Context, message *tgbotapi.Message) {
+	loadingMsg, _ := h.bot.SendLoadingReply(message, h.getCurrentUser().Lang)
+	defer h.bot.DeleteMessage(&loadingMsg)
+
 	switch message.Command() {
 	case "start":
 		h.handleStartCommand(message)
 	case "image":
-		h.handleImageCommand(message)
+		h.handleImageCommand(ctx, message)
 	case "new":
 		h.handleNewCommand(ctx, message)
 	case "chats":
