@@ -1,4 +1,4 @@
-package main
+package util
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-func downloadFileByUrl(url string) (*os.File, error) {
+func DownloadFileByUrl(url string) (*os.File, error) {
 	file, err := os.CreateTemp(os.TempDir(), "voice")
 
 	if err != nil {
@@ -29,7 +29,7 @@ func downloadFileByUrl(url string) (*os.File, error) {
 	return file, err
 }
 
-func convertOggToMp3(oggFilepath string) (mp3Filepath string, err error) {
+func ConvertOggToMp3(oggFilepath string) (mp3Filepath string, err error) {
 	name := filepath.Base(oggFilepath)
 	mp3Filepath = fmt.Sprintf("%s%s.mp3", os.TempDir(), name)
 
