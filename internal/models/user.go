@@ -1,6 +1,9 @@
 package models
 
-import "go.mongodb.org/mongo-driver/bson/primitive"
+import (
+	"github.com/sashabaranov/go-openai"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
 
 const (
 	RoleUser         = "user"
@@ -15,7 +18,8 @@ type User struct {
 	BanReason    *string             `bson:"ban_reason"`
 	Lang         string
 	Admin        bool
-	MaxTokens    int `bson:"max_tokens"`
+	Model        *string `bson:"model"`
+	MaxTokens    int     `bson:"max_tokens"`
 }
 
 func (u *User) IsBanned() bool {
@@ -32,4 +36,12 @@ func (u *User) GetMaxTokens() int {
 	}
 
 	return u.MaxTokens
+}
+
+func (u *User) GetModel() string {
+	if u.Model != nil {
+		return *u.Model
+	}
+
+	return openai.GPT3Dot5Turbo
 }

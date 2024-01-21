@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"ibuddy_bot/internal/localization"
 )
 
 type TgBotClient struct {
@@ -30,17 +29,10 @@ func (h *TgBotClient) DeleteMessage(msg *tgbotapi.Message) (tgbotapi.Message, er
 	return h.BotAPI.Send(tgbotapi.NewDeleteMessage(msg.Chat.ID, msg.MessageID))
 }
 
-func (h *TgBotClient) SendLoadingReply(msg *tgbotapi.Message, userLang string) (tgbotapi.Message, error) {
-	loadingMsgConfig := h.NewSystemMessage(
-		msg.Chat.ID,
-		localization.GetLocalizedText(userLang, localization.TextLoading),
-	)
-	loadingMsgConfig.ReplyMarkup = tgbotapi.ReplyKeyboardRemove{
-		RemoveKeyboard: true,
-	}
-	loadingMsgConfig.ReplyToMessageID = msg.MessageID
+func (h *TgBotClient) SendChatTypingAction(chatId int64) {
+	loadingMsgConfig := tgbotapi.NewChatAction(chatId, tgbotapi.ChatTyping)
 
-	return h.BotAPI.Send(loadingMsgConfig)
+	h.BotAPI.Send(loadingMsgConfig)
 }
 
 func (h *TgBotClient) NewSystemReply(message *tgbotapi.Message, text string) (tgbotapi.Message, error) {

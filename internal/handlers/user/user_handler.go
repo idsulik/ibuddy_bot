@@ -69,8 +69,7 @@ func (h *Handler) handleMessage(ctx context.Context, message *tgbotapi.Message) 
 	var err error
 	user := h.getCurrentUser()
 
-	loadingMsg, _ := h.bot.SendLoadingReply(message, h.getCurrentUser().Lang)
-	defer h.bot.DeleteMessage(&loadingMsg)
+	h.bot.SendChatTypingAction(message.Chat.ID)
 
 	messageText := strings.TrimSpace(message.Text)
 	if len(messageText) < 2 {
@@ -156,7 +155,7 @@ func (h *Handler) handleMessage(ctx context.Context, message *tgbotapi.Message) 
 	resp, err := h.client.CreateChatCompletion(
 		ctx,
 		openai.ChatCompletionRequest{
-			Model:     openai.GPT3Dot5Turbo,
+			Model:     user.GetModel(),
 			Messages:  messages,
 			MaxTokens: user.GetMaxTokens(),
 			User:      strconv.FormatInt(user.Id, 10),
@@ -256,8 +255,7 @@ func (h *Handler) extractVoiceText(ctx context.Context, message *tgbotapi.Messag
 }
 
 func (h *Handler) handleCommandMessage(ctx context.Context, message *tgbotapi.Message) {
-	loadingMsg, _ := h.bot.SendLoadingReply(message, h.getCurrentUser().Lang)
-	defer h.bot.DeleteMessage(&loadingMsg)
+	h.bot.SendChatTypingAction(message.Chat.ID)
 
 	switch message.Command() {
 	case "start":
